@@ -6,6 +6,9 @@
 # castiglione@mac.com
 
 # includes
+
+use warnings; use strict;
+
 use POE;
 use POE::Component::IRC;
 use Socket;
@@ -15,48 +18,50 @@ use POSIX qw(ceil floor);
 use Storable
 
 # constants
-$version        = '1.10';
-$channel        = '#pc-ooc';
-$nick           = "bananabot";
-$username   	= "bananabot";# . $version ;
-$password       = 'bananabot';
-$server	        = 'irc.sorcery.net';
-$port           = '6667';
-$owner 	        = 'banana';
-$network        = '$network';
-$totalcolour    = '04';
-$rollcolour     = '12';
-$dicecolour     = '03';
-$successcolour  = '13';
-$LOG            = 0;
-$DEBUG          = 0;
-$interval       = 0;
+my $version        = '1.10';
+my $channel        = '#pc-ooc';
+my $nick           = "bananabot";
+my $username   	= "bananabot";# . $version ;
+my $password       = 'bananabot';
+my $server	        = 'irc.sorcery.net';
+my $port           = '6667';
+my $owner 	        = 'banana';
+my $network        = '$network';
+my $totalcolour    = '04';
+my $rollcolour     = '12';
+my $dicecolour     = '03';
+my $successcolour  = '13';
+my $LOG            = 0;
+my $DEBUG          = 0;
+my $interval       = 0;
 
 # initial aliases
-%aliases	=	('fudge',           	'4dF',
-                'gurps',                '3d6',
-				'(fs|feng(shui)?)',     'o-o',
-				'(rand)?char',          '4d6li,6',
-				'(\d*)\s*w\s*(\d*)',    '$1\@$2#d10',
-				'(\d*)\s*g\s*(\d*)',    '$1\@$2#3d6',
-				'(\d*)\s*sr\s*(\d*)',   '$1\@\@$2#d6',
-				'(\d*)k(\d*)',          '$1o10l@{[$1-$2]}i',
-				'(\d*)e',				'$1d6l@{[$1-3]}',
-				'dagon',                '3#4d5l+3,3',
-				'duel',					'd10000');
+my %aliases = (
+	'fudge',           	'4dF',
+	'gurps',                '3d6',
+	'(fs|feng(shui)?)',     'o-o',
+	'(rand)?char',          '4d6li,6',
+	'(\d*)\s*w\s*(\d*)',    '$1\@$2#d10',
+	'(\d*)\s*g\s*(\d*)',    '$1\@$2#3d6',
+	'(\d*)\s*sr\s*(\d*)',   '$1\@\@$2#d6',
+	'(\d*)k(\d*)',          '$1o10l@{[$1-$2]}i',
+	'(\d*)e',		'$1d6l@{[$1-3]}',
+	'dagon',                '3#4d5l+3,3',
+	'duel',			'd10000'
+);
 #				'vs(\D*)(\d*)(\D*)(\d*)' '\"$1: \"d20+$2&\"$3: \"d20+$4');
 # initialise last-seen db
-%last = ();
-%lastwhen = ();
+my %last = ();
+my %lastwhen = ();
 # or read in from log if it exists
-$lastfile = $nick.'.last';
-if (-e $lastfile && -r $lastfile) {
-    $rlast = retrieve($nick.'.last'); 
+my $lastfile = $nick.'.last';
+if (-e $lastfile && -r $lastfile){
+    my $rlast = retrieve($nick.'.last'); 
     %last = %$rlast;
 }
-$whenfile = $nick.'.when';
+my $whenfile = $nick.'.when';
 if (-e $whenfile && -r $whenfile) {
-    $rwhen = retrieve($nick.'.when');
+    my $rwhen = retrieve($nick.'.when');
     %lastwhen = %$rwhen;
 }
 
@@ -72,7 +77,7 @@ POE::Session->create(
 		irc_kick	=> \&on_kick						# listen for kicks
 	}
 );
-$exit = 0;
+my $exit = 0;
 # initialise RNG
 srand(time());
 # start the event loop
@@ -80,8 +85,10 @@ $poe_kernel->run();									# run forever
 
 # go into a loop of attempting to connect
 # currently only tries once
+my ($who, $what, $when, $where, $why, $lines); #TODO: sort this mess out
+
 sub on_start {							
-	$address = inet_ntoa(inet_aton($server));		# translate address to IP
+	my $address = inet_ntoa(inet_aton($server));		# translate address to IP
 	
 	if ($LOG == 1) {print "on_start\n";}
 	
@@ -106,7 +113,7 @@ sub on_connect {
 
 # daemonize - reproduce asexually, eat young
 sub daemon {
-	$pid = fork();
+	my $pid = fork();
 	exit if $pid;
 	die "Can't fork: $!" unless defined($pid);
 	POSIX::setsid() or die "Can't start session: $!"; #Is the namespace actually necessary here?
@@ -115,28 +122,30 @@ sub daemon {
 # autorejoin - necessary out there in the wild internet where people kick bots for fun
 # something to look into: are there other ways of being removed from a channel?
 sub on_kick {
-	$knick = @_[ARG2];
+	my $knick = $_[ARG2];
 	if ($knick eq $nick) {
 		$poe_kernel->post($network, join => $channel);
 	}
 }
 
 sub on_private  { #Received a private message
-	($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
+	my ($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
 	$user = (split /!/, $user)[0];
 	
 	if ($LOG == 1) { #be an actual IRC client
 		my $ts = scalar(localtime);
 		print "[$ts] *$user* $_\n";
 	}
-
+	
+	my $cmd;
+	my $msg;
 	if (/^\!/) { #nasty nasty regexes
 		if (/^\![a-zA-Z]+\ .+/) {
 			s/^\!([a-zA-Z]+)\ (.*)/$1SPLITTERHACK$2/;
 			($cmd, $msg) = split(/SPLITTERHACK/);
 		} else {
 			s/^\!//;
-			$cmd = $_;
+			my $cmd = $_;
 			$msg = '';
 		}
 		do_command($user, $user, $cmd, $msg);
@@ -155,7 +164,7 @@ sub on_private  { #Received a private message
 }
 
 sub on_public {
-	($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
+	my ($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
 	$user = (split /!/, $user)[0];
 	$channel = $channel->[0];
 	
@@ -173,6 +182,8 @@ sub on_public {
 	$last{$user} = $_; # add to last database
 	$lastwhen{$user} = time();
 
+	my $cmd;
+	my $msg;
 	if (/^\!/) { #the same nasty regexes all over again
 		if (/^\![a-zA-Z]+\ .+/) {
 			s/^\!([a-zA-Z]+)\ (.*)/$1SPLITTERHACK$2/;
@@ -199,7 +210,7 @@ sub do_command { # post-parsing command switcher
 	if ($who =~ /dong/i) {  # hack for Roseo's stupid thing
 	    return;
 	}
-	$aliaslist = join('|', (keys %aliases));
+	my $aliaslist = join('|', (keys %aliases));
 	if		($what =~ /^help/i) {
 		cmd_help($why);
 	} elsif	($what =~ /^quit/i) {
@@ -230,7 +241,7 @@ sub cmd_lastseen {
 		#$poe_kernel->post($network, 'kick'=>$where, $who, "HA! HA! I'm using THE INTERNET!");
 	} else {
 		foreach $nick (keys %last) {
-		    $safenick = $nick;
+		    my $safenick = $nick;
 		    $safenick =~ s/\|/\\\|/g;
 			if ($why =~ /^$safenick$/i) {
 			    $why = $nick;
@@ -239,10 +250,10 @@ sub cmd_lastseen {
 				$what = $last{$why};
 				
 				if ($when > 60) {
-				    $whenm = floor($when / 60);
-				    $whens = $when - $whenm * 60;
+				    my $whenm = floor($when / 60);
+				    my $whens = $when - $whenm * 60;
 				    if ($whenm > 60) {
-				        $whenh = floor($whenm / 60);
+				        my $whenh = floor($whenm / 60);
 				        $whenm = floor($whenm - $whenh * 60);
 				        $poe_kernel->post($network, 'privmsg'=>$where, "I saw $nick $whenh hour" . ($whenh > 1 ? "s" : "") . " and $whenm minutes ago, saying \"\002$what\002\".");
 				    } else {
@@ -261,12 +272,12 @@ sub cmd_lastseen {
 sub cmd_alias {
 	if ($why eq '') {
 		$poe_kernel->post($network, 'privmsg'=>$where, "\003${rollcolour}Currently defined aliases:");
-		foreach $alias (keys %aliases) {
+		foreach my $alias (keys %aliases) {
 			$poe_kernel->post($network, 'privmsg'=>$where, "\003$dicecolour$alias\t\003$totalcolour$aliases{$alias}");
 		}
 	} else {
-		($alias, @definition) = split(/\s/, $why);
-		$definition = "@definition";
+		my ($alias, @definition) = split(/\s/, $why);
+		my $definition = "@definition";
 		if ($alias eq '') {
 			error(9, "The correct usage is !alias <alias> definition, blank definition clears");
 		} elsif ($alias =~ /(\d|(\d*)\s*g\s*(\d*)|(\d*)\s*w\s*(\d*)|fudge|^.$)/ && ($who ne $owner)) {
@@ -342,19 +353,20 @@ sub cmd_help {
 }
 
 sub cmd_roll {
-	$expression = $why;
+	my ($die, $n, $s, $o, $j, $q, $type, @dice, $notones, $answercolour);
+	my $expression = $why;
 	### INTERPRET MACROS ###
 #	$expression =~ s/(\d*)\s*w\s*(\d*)/$1\@$2#d10/ig;    # hack to make args work
-    foreach $alias (keys %aliases) {
+    foreach my $alias (keys %aliases) {
 #        $poe_kernel->post($network, privmsg => $where, "looking for $alias");
         eval('$expression =~ s/$alias/' . $aliases{$alias} . '/ig;');
     }
 	$poe_kernel->post($network, privmsg => $where, "DEBUG: \$expression = $expression") unless $DEBUG == 0;
 	### CALCULATE NUMBER OF ROLLS #############################
 	$lines = 1;
-	$target = 0;
-	$ones = -1;
-    $fre = '\s*((\d*)\s*(@@?\s*\d*)?)\s*';
+	my $target = 0;
+	my $ones = -1;
+    my $fre = '\s*((\d*)\s*(@@?\s*\d*)?)\s*';
     if ($expression =~ /^${fre}#/) {
         $expression =~ s/${fre}#([^,]+)/and_repeat($4, $1)/e;
     } elsif ($expression =~ /#$fre$/) {
@@ -369,39 +381,40 @@ sub cmd_roll {
 		$lines = 10;
 	}
 	### SEPERATE BATCH ROLLS #################################
-	for ($i = 0; $i < $lines; $i++) {
+	for (my $i = 0; $i < $lines; $i++) {
 	    if ($ones > -1) {
 	        $ones = 0;    # shadowrun check-for-ones
     	    $notones = 0;
     	}
-		@batch = split('&', $expression);
-		$line = '';
-		$successes = 0;
-		$swmishap = 0;
+		my @batch = split('&', $expression);
+		my $line = '';
+		my $successes = 0;
+		my $swmishap = 0;
 		foreach $_ (@batch) {
 	### IMPLEMENT ** OPERATOR #################################
 	    	while (/\*\*/) {				
 		    	s/([^,#]+)\*\*\s*(\d*)/roll_repeat($1, $2)/e;
 		    }
-		    $p = $_;						#for pretty-printing
+		    my $p = $_;						#for pretty-printing
 		    s/".*"//g;
 		    $p =~ s/"(.*)"/$1/g;
 	### SUBSTITUTE DIE ROLL RESULTS FOR THE d-EXPRESSIONS ####		7dfh5l
-			@rolls = ($_ =~ /(\d*[do]\d*f?[hl]?\d*[hl]?\d*i?|\d*s)/ig);
-			for $roll (@rolls) {
-				$result = 0;
-				$presult = "\003$dicecolour";
-				$orig = $roll;
+			my @rolls = ($_ =~ /(\d*[do]\d*f?[hl]?\d*[hl]?\d*i?|\d*s)/ig);
+			for my $roll (@rolls) {
+				my $result = 0;
+				my $presult = "\003$dicecolour";
+				my $orig = $roll;
 	### CHECK FOR STAR WARS FAGGOTRY ###
 			    if ($roll =~ /s/i) {
+			    	my ($die);
 			        # OK, this is a star wars roll - TIME TO GO INSANE >:(
 			        ($n) = ($roll =~ /\d+/g);
 			        $poe_kernel->post($network, privmsg => $where, "found star wars roll: $n") unless !$DEBUG;
 			        if ($n == '') {$n = 1;}
 			        $s = 6;
 			        # Roll non-wild dice
-			        $highest = 0;
-			        for ($j = 0; $j < ($n - 1); $j++) {
+			        my $highest = 0;
+			        for (my $j = 0; $j < ($n - 1); $j++) {
 			            $die = int(rand($s)) + 1;
 			            $result += $die;
 			            $presult .= '+' unless ($j == 0);
@@ -440,14 +453,15 @@ sub cmd_roll {
 				}
 				$roll =~ s/(d|o)(h|l|i)/${1}6$2/i;
 	### PARSE #################################################
+				my $individual;
 				if ($roll =~ /i/i) {
 					$individual = 1;
 					$roll =~ s/i//i;
 				} else {
 					$individual = 0;
 				}
-				($roll, $h) = split(/h/i, $roll);
-				($roll, $l) = split(/l/i, $roll);
+				($roll, my $h) = split(/h/i, $roll);
+				($roll, my $l) = split(/l/i, $roll);
 				if ($roll =~ /d/i) {
 					($n, $s) = split(/d/i, $roll);
 					$type = 'd';
@@ -479,6 +493,7 @@ sub cmd_roll {
 				$poe_kernel->post($network, privmsg => $where, "about to roll; \$n=$n \$s=$s \$i=$i \$h=$h \$l=$l") unless !$DEBUG;
 	### ROLL ROLL ROLL ROLL ROLL ROLL ROLL ### BANANABOT ######			
 				@dice = ();
+				my (@sorteddice, @dropped, $top);
 				if ($o == 0 && $s !~ /f/i) {
 					for ($j = 0; $j < $n; $j++) {
  						$die = int(rand($s)) + 1;
@@ -575,7 +590,7 @@ sub cmd_roll {
 				return;
 			}
 	### EVALUATE THE ANSWER ###################################
-			$answer = eval;
+			my $answer = eval;
 #			unless ($answer =~ /^[-\d\.]+$/) { #This should never be reached
 #				error(42, "'$_' evaluates to unacceptable result '$answer'");
 #				return;
@@ -614,19 +629,19 @@ sub cmd_roll {
 }
 
 sub roll_repeat {
-	($expr, $factor) = @_;
+	my ($expr, $factor) = @_;
 	if ($factor > 128 || $factor < 1) {
 		error(220, "Someone's playing silly buggers.");
 		return "fail";
 	}
-	$exprplus = $expr . ' + ';
+	my $exprplus = $expr . ' + ';
 	return (($exprplus x ($factor - 1)) . $expr);
 }
 
 sub and_repeat {
-	($expr, $factor) = @_;
+	my ($expr, $factor) = @_;
 	if ($factor =~ /@@/) {   #shadowrun roll
-	   $ones = 0;
+	   my $ones = 0;
 	   if ($factor !~ /@@\d/) {
 	       $factor .= '5';
 	   }
@@ -639,37 +654,38 @@ sub and_repeat {
 	} elsif ($factor =~ /^@/) {
 	    $factor = '1' . $factor;
 	}
-	($factor, $target) = split(/@/, $factor);
+	($factor, my $target) = split(/@/, $factor);
 	if ($factor > 128 || $factor < 1) {
 		error(220, "Someone's playing silly buggers.");
 		return "fail";
 	}
-	$exprplus = $expr . '&';
+	my $exprplus = $expr . '&';
 	return (($exprplus x ($factor - 1)) . $expr);
 }
 
 sub error() {
-	$n = shift;
-	$r = shift;
+	my $n = shift;
+	my $r = shift;
 	$poe_kernel->post($network, privmsg => $where, "$who,\003$rollcolour Error: $r\003");
 }
 
 sub pad() {
-	$nd = shift;
-	$sd = shift;
-	$inp = shift;
+	my $nd = shift;
+	my $sd = shift;
+	my $inp = shift;
 
 	if ($lines == 1) {
 		return $inp;
 	}
 	
+	my $maxlen;
 	if ($sd =~ /f/i) {
 		$maxlen = $nd;
 	} else {
 		$maxlen = length ($nd * $sd);
 	}
 	
-	for ($k = length $inp; $k < $maxlen; $k++) {
+	for (my $k = length $inp; $k < $maxlen; $k++) {
 		$inp .= ' ';
 	}
 	
