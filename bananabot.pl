@@ -20,11 +20,11 @@ use Storable
 
 # constants
 my $version		= '1.10';
-my $channel		= '#pc-ooc';
+my $channel		= '#bananabot';
 my $nick		= "bananabot";
 my $username		= "bananabot";# . $version ;
 my $password		= 'bananabot';
-my $server		= 'irc.sorcery.net';
+my $server		= 'irc.ucc.asn.au';
 my $port		= '6667';
 my $owner		= 'banana';
 my $network		= '$network';
@@ -109,7 +109,7 @@ sub on_connect {
 	daemon();	# Once timers are working, move this to just before run()
 	if ($LOG == 1) {print "/join $channel\n";}
 	$poe_kernel->post($network, join => $channel);
-	$poe_kernel->post($network, privmsg => 'NickServ', "identify $password") unless ($password eq '');
+	private_message('NickServ', "identify $password") unless ($password eq '');
 }
 
 # daemonize - reproduce asexually, eat young
@@ -217,7 +217,7 @@ sub do_command {			# post-parsing command switcher
 	{
 		
 		when (/^help/i) {
-			cmd_help($why);
+			cmd_help($why, $where);
 		}
 		when (/^quit/i) {
 			cmd_quit();
@@ -270,25 +270,25 @@ sub cmd_lastseen {
 					if ($whenm > 60) {
 						my $whenh = floor($whenm / 60);
 						$whenm = floor($whenm - $whenh * 60);
-						$poe_kernel->post($network, 'privmsg'=>$where, "I saw $nick $whenh hour" . ($whenh > 1 ? "s" : "") . " and $whenm minutes ago, saying \"\002$what\002\".");
+						private_message($where, "I saw $nick $whenh hour" . ($whenh > 1 ? "s" : "") . " and $whenm minutes ago, saying \"\002$what\002\".");
 					} else {
-						$poe_kernel->post($network, 'privmsg'=>$where, "I saw $nick $whenm minute" . ($whenm > 1 ? "s" : "") . " and $whens seconds ago, saying \"\002$what\002\".");
+						private_message($where, "I saw $nick $whenm minute" . ($whenm > 1 ? "s" : "") . " and $whens seconds ago, saying \"\002$what\002\".");
 					}
 				} else {
-					$poe_kernel->post($network, 'privmsg'=>$where, "I saw $nick $when seconds ago, saying \"\002$what\002\".");
+					private_message($where, "I saw $nick $when seconds ago, saying \"\002$what\002\".");
 				}
 				return;
 			}
 		}
-		$poe_kernel->post($network, 'privmsg'=>$where, "I haven't seen ${why}.");
+		private_message($where, "I haven't seen ${why}.");
 	}
 }
 
 sub cmd_alias {
 	if ($why eq '') {
-		$poe_kernel->post($network, 'privmsg'=>$where, "\003${rollcolour}Currently defined aliases:");
+		private_message($where, "\003${rollcolour}Currently defined aliases:");
 		foreach my $alias (keys %aliases) {
-			$poe_kernel->post($network, 'privmsg'=>$where, "\003$dicecolour$alias\t\003$totalcolour$aliases{$alias}");
+			private_message($where, "\003$dicecolour$alias\t\003$totalcolour$aliases{$alias}");
 		}
 	} else {
 		my ($alias, @definition) = split(/\s/, $why);
@@ -346,24 +346,28 @@ sub cmd_join {
 
 # This could do with some actual documentation
 sub cmd_help {
-	$_ = shift;
-	if ($_ eq '') {$_ = 'general';}
-	if (/general/i) {
-		$poe_kernel->post($network, privmsg => $where, 'usage:');
-		$poe_kernel->post($network, privmsg => $where, '  !command <arguments>');
-		$poe_kernel->post($network, privmsg => $where, '  /msg bananabot !command <arguments>');
-		$poe_kernel->post($network, privmsg => $where, 'commands: alias, help, join, quit, roll, seen');
-		$poe_kernel->post($network, privmsg => $where, 'commands: alias, help, join, quit, roll, seen');
-	} elsif (/alias/i) {
-		$poe_kernel->post($network, privmsg => $where, 'Aliases are regular expressions used to add features to the dice language.');
-		$poe_kernel->post($network, privmsg => $where, 'To set an alias:');
-		$poe_kernel->post($network, privmsg => $where, '  !alias <alias> <definition>');
-		$poe_kernel->post($network, privmsg => $where, 'To remove an alias:');
-		$poe_kernel->post($network, privmsg => $where, '  !alias <alias>');
-		$poe_kernel->post($network, privmsg => $where, 'To view current aliases:');
-		$poe_kernel->post($network, privmsg => $where, '  !alias');
-	} else {
-		error(-1, "No help available for topic.");
+	my ($topic, $recipient) = @_;
+	$topic ||= 'general';
+	given ($topic) {
+		when (/general/i) {
+			private_message($recipient, 'usage:');
+			private_message($recipient, '  !command <arguments>');
+			private_message($recipient, '  /msg bananabot !command <arguments>');
+			private_message($recipient, 'commands: alias, help, join, quit, roll, seen');
+			private_message($recipient, 'commands: alias, help, join, quit, roll, seen');
+		}
+		when (/alias/i) {
+			private_message($recipient, 'Aliases are regular expressions used to add features to the dice language.');
+			private_message($recipient, 'To set an alias:');
+			private_message($recipient, '  !alias <alias> <definition>');
+			private_message($recipient, 'To remove an alias:');
+			private_message($recipient, '  !alias <alias>');
+			private_message($recipient, 'To view current aliases:');
+			private_message($recipient, '  !alias');
+		} 
+		default {
+			error(-1, "No help available for topic.");
+		}
 	}
 }
 
@@ -373,10 +377,10 @@ sub cmd_roll {
 	### INTERPRET MACROS ###
 #	$expression =~ s/(\d*)\s*w\s*(\d*)/$1\@$2#d10/ig;	# hack to make args work
 	foreach my $alias (keys %aliases) {
-#		$poe_kernel->post($network, privmsg => $where, "looking for $alias");
+#		private_message($where, "looking for $alias");
 		eval('$expression =~ s/$alias/' . $aliases{$alias} . '/ig;');
 	}
-	$poe_kernel->post($network, privmsg => $where, "DEBUG: \$expression = $expression") unless $DEBUG == 0;
+	private_message($where, "DEBUG: \$expression = $expression") unless $DEBUG == 0;
 	### CALCULATE NUMBER OF ROLLS #############################
 	$lines = 1;
 	my $target = 0;
@@ -424,7 +428,7 @@ sub cmd_roll {
 					my ($die);
 					# OK, this is a star wars roll - TIME TO GO INSANE >:(
 					($n) = ($roll =~ /\d+/g);
-					$poe_kernel->post($network, privmsg => $where, "found star wars roll: $n") unless !$DEBUG;
+					private_message($where, "found star wars roll: $n") unless !$DEBUG;
 					if ($n == '') {$n = 1;}
 					$s = 6;
 					# Roll non-wild dice
@@ -505,7 +509,7 @@ sub cmd_roll {
  					error(200, "$s is an invalid number of sides.");
  					return;
  				}
-				$poe_kernel->post($network, privmsg => $where, "about to roll; \$n=$n \$s=$s \$i=$i \$h=$h \$l=$l") unless !$DEBUG;
+				private_message($where, "about to roll; \$n=$n \$s=$s \$i=$i \$h=$h \$l=$l") unless !$DEBUG;
 	### ROLL ROLL ROLL ROLL ROLL ROLL ROLL ### BANANABOT ######			
 				@dice = ();
 				my (@sorteddice, @dropped, $top);
@@ -637,7 +641,7 @@ sub cmd_roll {
 		if ($ones > -1) {
 			$line .= "\003${rollcolour}($successes hit" . ($successes != 1 ? "s" : "") . ", " . ($notones <= $ones ? "\003${totalcolour}" : "") . "$ones one" . ($ones != 1 ? "s" : "") . "\003${rollcolour})";
 		}
-		$poe_kernel->post($network, privmsg => $where, "$who, $line");
+		private_message($where, "$who, $line");
 	}
 	
 	return;
@@ -681,7 +685,7 @@ sub and_repeat {
 sub error() {
 	my $n = shift;
 	my $r = shift;
-	$poe_kernel->post($network, privmsg => $where, "$who,\003$rollcolour Error: $r\003");
+	private_message($where, "$who,\003$rollcolour Error: $r\003");
 }
 
 sub pad() {
@@ -705,4 +709,10 @@ sub pad() {
 	}
 	
 	return $inp;
+}
+
+
+sub private_message() {
+	my ($recipient, $message) = @_;
+	$poe_kernel->post($network, 'privmsg'=>$recipient, $message);
 }
