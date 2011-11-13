@@ -8,6 +8,7 @@
 # includes
 
 use warnings; use strict;
+use 5.010;
 
 use POE;
 use POE::Component::IRC;
@@ -25,7 +26,7 @@ my $username		= "bananabot";# . $version ;
 my $password		= 'bananabot';
 my $server		= 'irc.sorcery.net';
 my $port		= '6667';
-my $owner 		= 'banana';
+my $owner		= 'banana';
 my $network		= '$network';
 my $totalcolour		= '04';
 my $rollcolour		= '12';
@@ -211,28 +212,42 @@ sub do_command {			# post-parsing command switcher
 		return;
 	}
 	my $aliaslist = join('|', (keys %aliases));
-	if		($what =~ /^help/i) {
-		cmd_help($why);
-	} elsif	($what =~ /^quit/i) {
-		cmd_quit();
-	} elsif	($what =~ /^mquit/i) {
-		cmd_mquit();
-	} elsif	($what =~ /^r(oll)?/i) {
-		cmd_roll();
-	} elsif ($what =~ /^join/i) {
-		cmd_join();
-	} elsif ($what =~ /^alias/i) {
-		cmd_alias();
-	} elsif	($what =~ /^(seen|last(seen)?)/i) {
-		cmd_lastseen();
-	} elsif ($what =~ /^botsnack/i) {
-		cmd_botsnack();
-#	} elsif ($what =~ /^($aliaslist)/i) {
-#		$why = $what . ' ' . $why;
-#		cmd_roll();
-	} elsif ($what !~ /^[\s!]*$/) {
-		$why = $what;
-		cmd_roll();
+	
+	given ($what)
+	{
+		
+		when (/^help/i) {
+			cmd_help($why);
+		}
+		when (/^quit/i) {
+			cmd_quit();
+		}
+		when (/^mquit/i) {
+			cmd_mquit();
+		}
+		when (/^r(oll)?/i) {
+			cmd_roll();
+		}
+		when (/^join/i) {
+			cmd_join();
+		}
+		when (/^alias/i) {
+			cmd_alias();
+		}
+		when (/^(seen|last(seen)?)/i) {
+			cmd_lastseen();
+		}
+		when (/^botsnack/i) {
+			cmd_botsnack();
+		}
+	#	when (/^($aliaslist)/i) {
+	#		$why = $what . ' ' . $why;
+	#		cmd_roll();
+	#	}
+		when (/^[\s!]*$/) {
+			$why = $what;
+			cmd_roll();
+		}
 	}
 }
 
