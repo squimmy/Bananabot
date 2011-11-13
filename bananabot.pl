@@ -86,7 +86,7 @@ $poe_kernel->run();							# run forever
 
 # go into a loop of attempting to connect
 # currently only tries once
-my ($who, $what, $when, $where, $why, $lines); #TODO: sort this mess out
+my ($when, $lines); #TODO: sort this mess out
 
 sub on_start {							
 	my $address = inet_ntoa(inet_aton($server));		# translate address to IP
@@ -207,51 +207,50 @@ sub on_disconnect {
 }
 
 sub do_command {			# post-parsing command switcher
-	($who, $where, $what, $why) = @_;
+	my ($who, $where, $what, $why) = @_;
 	if ($who =~ /dong/i) {		# hack for Roseo's stupid thing
 		return;
 	}
 	my $aliaslist = join('|', (keys %aliases));
 	
-	given ($what)
-	{
-		
+	given ($what) {
 		when (/^help/i) {
 			cmd_help($why, $where);
 		}
 		when (/^quit/i) {
-			cmd_quit();
+			cmd_quit($who, $where, $why);
 		}
 		when (/^mquit/i) {
-			cmd_mquit();
+			cmd_mquit($who, $where, $why);
 		}
 		when (/^r(oll)?/i) {
-			cmd_roll();
+			cmd_roll($who, $where, $why);
 		}
 		when (/^join/i) {
-			cmd_join();
+			cmd_join($who, $where, $why);
 		}
 		when (/^alias/i) {
-			cmd_alias();
+			cmd_alias($who, $where, $why);
 		}
 		when (/^(seen|last(seen)?)/i) {
-			cmd_lastseen();
+			cmd_lastseen($who, $where, $what, $why);
 		}
 		when (/^botsnack/i) {
-			cmd_botsnack();
+			cmd_botsnack($where);
 		}
 	#	when (/^($aliaslist)/i) {
 	#		$why = $what . ' ' . $why;
-	#		cmd_roll();
+	#		cmd_roll($who, $where, $why);
 	#	}
 		when (/^[\s!]*$/) {
 			$why = $what;
-			cmd_roll();
+			cmd_roll($who, $where, $why);
 		}
 	}
 }
 
 sub cmd_lastseen {
+	my ($who, $where, $what, $why) = @_;
 	if ($why =~ /$who/i) {
 		#$poe_kernel->post($network, 'kick'=>$where, $who, "HA! HA! I'm using THE INTERNET!");
 	} else {
@@ -285,6 +284,7 @@ sub cmd_lastseen {
 }
 
 sub cmd_alias {
+	my ($who, $where, $why) = @_;
 	if ($why eq '') {
 		private_message($where, "\003${rollcolour}Currently defined aliases:");
 		foreach my $alias (keys %aliases) {
@@ -294,9 +294,9 @@ sub cmd_alias {
 		my ($alias, @definition) = split(/\s/, $why);
 		my $definition = "@definition";
 		if ($alias eq '') {
-			error(9, "The correct usage is !alias <alias> definition, blank definition clears");
+			error($where, $who, 9, "The correct usage is !alias <alias> definition, blank definition clears");
 		} elsif ($alias =~ /(\d|(\d*)\s*g\s*(\d*)|(\d*)\s*w\s*(\d*)|fudge|^.$)/ && ($who ne $owner)) {
-			error(2, "Only $owner can set certain 'dangerous' aliases.");
+			error($where, $who, 2, "Only $owner can set certain 'dangerous' aliases.");
 		} else {
 			if ($definition ne '') {
 				$aliases{$alias} = $definition;
@@ -309,38 +309,42 @@ sub cmd_alias {
 
 # For #partyhard botmolesters
 sub cmd_botsnack {
-	error(0, 'Who do you think I am, foxxbot?');
+	my ($who, $where) = @_;
+	error($where, $who, 0, 'Who do you think I am, foxxbot?');
 }
 
 # Quits
 sub cmd_quit {
+	my ($who, $where, $why) = @_;
 	if ($who eq $owner) {
 		$exit = 1;
 		store(\%last, $lastfile);
 		store(\%lastwhen, $whenfile);
 		$poe_kernel->post($network, 'quit', $why);
 	} else {
-		error(45, "Only $owner can order me to quit.");
+		error($where, $who, 45, "Only $owner can order me to quit.");
 	}	
 }
 
 # WHAT IS THIS I DON'T REMEMBER
 sub cmd_mquit {
+	my ($who, $where, $why) = @_;
 	if ($who eq $owner) {
 		$poe_kernel->post($network, 'quit', $why);
 	} else {
-		error(49, "Only $owner can order me to quit.");
+		error($where, $who, 49, "Only $owner can order me to quit.");
 	}	
 }
 
 # This should be improved to allow anyone to use it if the bot's not in a channel
 sub cmd_join {
+	my ($who, $where, $why) = @_;
 	if ($who eq $owner) {
 		$poe_kernel->post($network, 'part', $channel);
 		$channel = $why;
 		$poe_kernel->post($network, 'join', $channel);
 	} else {
-		error(46, "Only $owner can order me to join channels.");
+		error($where, $who, 46, "Only $owner can order me to join channels.");
 	}	
 }
 
@@ -366,12 +370,13 @@ sub cmd_help {
 			private_message($recipient, '  !alias');
 		} 
 		default {
-			error(-1, "No help available for topic.");
+			error($recipient, -1, "No help available for topic.");
 		}
 	}
 }
 
 sub cmd_roll {
+	my ($who, $where, $why) = @_;
 	my ($die, $n, $s, $o, $j, $q, $type, @dice, $notones, $answercolour);
 	my $expression = $why;
 	### INTERPRET MACROS ###
@@ -387,9 +392,9 @@ sub cmd_roll {
 	my $ones = -1;
 	my $fre = '\s*((\d*)\s*(@@?\s*\d*)?)\s*';
 	if ($expression =~ /^${fre}#/) {
-		$expression =~ s/${fre}#([^,]+)/and_repeat($4, $1)/e;
+		$expression =~ s/${fre}#([^,]+)/and_repeat($who, $where, $4, $1)/e;
 	} elsif ($expression =~ /#$fre$/) {
-		$expression =~ s/([^,]+)#$fre/and_repeat($1, $2)/e;
+		$expression =~ s/([^,]+)#$fre/and_repeat($who, $where, $1, $2)/e;
 	}
 	if ($expression =~ /,\s*\d+/) {
 		($expression, $lines) = split(/\s*,\s*/, $expression);
@@ -412,7 +417,7 @@ sub cmd_roll {
 		foreach $_ (@batch) {
 	### IMPLEMENT ** OPERATOR #################################
 			while (/\*\*/) {				
-				s/([^,#]+)\*\*\s*(\d*)/roll_repeat($1, $2)/e;
+				s/([^,#]+)\*\*\s*(\d*)/roll_repeat($who, $where, $1, $2)/e;
 			}
 			my $p = $_;						#for pretty-printing
 			s/".*"//g;
@@ -494,19 +499,19 @@ sub cmd_roll {
 					$type = 's';
 				}
 				if ($n < 1) {
- 					error(100, "I can't roll less than 1 dice.");
+ 					error($where, $who, 100, "I can't roll less than 1 dice.");
  					return;
  				}
  				if ($n > 39278) {
- 					error(39278, "I can't roll that many dice.");
+ 					error($where, $who, 39278, "I can't roll that many dice.");
  					return;
  				}
  				if ($s > 24789653974) {
- 					error(24789653974, "I'M A PROFESSIONAL JOURNALIST. I THINK I KNOW HOW TO OPERATE A FUCKING HAT!");
+ 					error($where, $who, 24789653974, "I'M A PROFESSIONAL JOURNALIST. I THINK I KNOW HOW TO OPERATE A FUCKING HAT!");
  					return;
  				}
  				if ($s !~ /f/i && $s < 2) {
- 					error(200, "$s is an invalid number of sides.");
+ 					error($where, $who, 200, "$s is an invalid number of sides.");
  					return;
  				}
 				private_message($where, "about to roll; \$n=$n \$s=$s \$i=$i \$h=$h \$l=$l") unless !$DEBUG;
@@ -555,7 +560,7 @@ sub cmd_roll {
 					}
 				}
 				if ($h + $l > $n) {
- 					error(88, "You can't drop more dice than are rolled.");
+ 					error($where, $who, 88, "You can't drop more dice than are rolled.");
  					return;
  				}
 				foreach $die (@dice) {
@@ -605,13 +610,13 @@ sub cmd_roll {
 			s/\^/\*\*/g;	#convenience, allow ^ for **
 			s/p/\+/gi;	#convenience, allow p for +
 			unless(m/^[\d\s\(\)\+\-\*\/\%\.]+$/) {
-				error(-8, "I don't understand \"\002$why\002\".");
+				error($where, $who, -8, "I don't understand \"\002$why\002\".");
 				return;
 			}
 	### EVALUATE THE ANSWER ###################################
 			my $answer = eval;
 #			unless ($answer =~ /^[-\d\.]+$/) { #This should never be reached
-#				error(42, "'$_' evaluates to unacceptable result '$answer'");
+#				error($where, $who, 42, "'$_' evaluates to unacceptable result '$answer'");
 #				return;
 #			}
 #			$p =~ s/^\s*(.+)\s*$/$1/;
@@ -648,9 +653,9 @@ sub cmd_roll {
 }
 
 sub roll_repeat {
-	my ($expr, $factor) = @_;
+	my ($who, $where, $expr, $factor) = @_;
 	if ($factor > 128 || $factor < 1) {
-		error(220, "Someone's playing silly buggers.");
+		error($where, $who, 220, "Someone's playing silly buggers.");
 		return "fail";
 	}
 	my $exprplus = $expr . ' + ';
@@ -658,7 +663,7 @@ sub roll_repeat {
 }
 
 sub and_repeat {
-	my ($expr, $factor) = @_;
+	my ($who, $where, $expr, $factor) = @_;
 	if ($factor =~ /@@/) {	#shadowrun roll
 		my $ones = 0;
 		if ($factor !~ /@@\d/) {
@@ -675,7 +680,7 @@ sub and_repeat {
 	}
 	($factor, my $target) = split(/@/, $factor);
 	if ($factor > 128 || $factor < 1) {
-		error(220, "Someone's playing silly buggers.");
+		error($where, $who, 220, "Someone's playing silly buggers.");
 		return "fail";
 	}
 	my $exprplus = $expr . '&';
@@ -683,8 +688,7 @@ sub and_repeat {
 }
 
 sub error() {
-	my $n = shift;
-	my $r = shift;
+	my ($where, $who, $n, $r) = @_;
 	private_message($where, "$who,\003$rollcolour Error: $r\003");
 }
 
