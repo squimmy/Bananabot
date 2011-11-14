@@ -16,7 +16,7 @@ use Socket;
 use POSIX;
 use Math::Random::MT qw(srand rand);
 use POSIX qw(ceil floor);
-use Storable
+use Storable;
 
 # constants
 my $version		= '1.10';
@@ -152,12 +152,12 @@ sub on_private  {	#Received a private message
 }
 
 sub on_public {
-	my ($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
+	my ($user, $channel, $text) = @_[ARG0, ARG1, ARG2];
 	$user = (split /!/, $user)[0];
 	$channel = $channel->[0];
 	
 	#### LIGHTS HACK ####
-	if ($_ =~ /banana-chan/) {
+	if ($text =~ /banana-chan/) {
 		$poe_kernel->post($network, 'kick'=>$channel, $user, "HA! HA! I'm using THE INTERNET!");
 	}
 	## END LIGHTS HACK ##
@@ -167,21 +167,19 @@ sub on_public {
 		print "[$ts] <$user> $_\n";
 	}
 	
-	$last{$user} = $_;	# add to last database
+	$last{$user} = $text;	# add to last database
 	$lastwhen{$user} = time();
 
-	my $cmd;
-	my $msg;
-	if (/^\!/) {	#the same nasty regexes all over again
-		if (/^\![a-zA-Z]+\ .+/) {
-			s/^\!([a-zA-Z]+)\ (.*)/$1SPLITTERHACK$2/;
-			($cmd, $msg) = split(/SPLITTERHACK/);
-		} else {
-			s/^\!//;
-			$cmd = $_;
-			$msg = '';
-		}
-		do_command($user, $channel, $cmd, $msg);
+	my $valid_command = qr/
+		^\!		# compulsary exclamation mark
+		([a-zA-Z]+)	# some characters (stored in $1)
+		\s*		# optional whitespace
+		(.*)		# any remaining characters (stored in $2)
+		/x;
+
+	if ($text =~ /$valid_command/)
+	{
+		do_command($user, $channel, $1, $2);
 	}
 }
 
