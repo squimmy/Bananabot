@@ -135,7 +135,7 @@ sub on_private  {	#Received a private message
 	
 	if ($LOG == 1) {	#be an actual IRC client
 		my $ts = scalar(localtime);
-		print "[$ts] *$user* $_\n";
+		print "[$ts] *$user* $text\n";
 	}
 	
 	my $valid_command = qr/
@@ -164,7 +164,7 @@ sub on_public {
 	
 	if ($LOG == 1) {
 		my $ts = scalar(localtime);
-		print "[$ts] <$user> $_\n";
+		print "[$ts] <$user> $text\n";
 	}
 	
 	$last{$user} = $text;	# add to last database
@@ -221,7 +221,7 @@ sub do_command {			# post-parsing command switcher
 			cmd_lastseen($who, $where, $what, $why);
 		}
 		when (/^botsnack/i) {
-			cmd_botsnack($where);
+			cmd_botsnack($who, $where);
 		}
 	#	when (/^($aliaslist)/i) {
 	#		$why = $what . ' ' . $why;
@@ -342,7 +342,6 @@ sub cmd_help {
 			private_message($recipient, 'usage:');
 			private_message($recipient, '  !command <arguments>');
 			private_message($recipient, '  /msg bananabot !command <arguments>');
-			private_message($recipient, 'commands: alias, help, join, quit, roll, seen');
 			private_message($recipient, 'commands: alias, help, join, quit, roll, seen');
 		}
 		when (/alias/i) {
