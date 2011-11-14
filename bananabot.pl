@@ -130,7 +130,7 @@ sub on_kick {
 }
 
 sub on_private  {	#Received a private message
-	my ($user, $channel, $_) = @_[ARG0, ARG1, ARG2];
+	my ($user, $channel, $text) = @_[ARG0, ARG1, ARG2];
 	$user = (split /!/, $user)[0];
 	
 	if ($LOG == 1) {	#be an actual IRC client
@@ -138,29 +138,16 @@ sub on_private  {	#Received a private message
 		print "[$ts] *$user* $_\n";
 	}
 	
-	my $cmd;
-	my $msg;
-	if (/^\!/) {	#nasty nasty regexes
-		if (/^\![a-zA-Z]+\ .+/) {
-			s/^\!([a-zA-Z]+)\ (.*)/$1SPLITTERHACK$2/;
-			($cmd, $msg) = split(/SPLITTERHACK/);
-		} else {
-			s/^\!//;
-			my $cmd = $_;
-			$msg = '';
-		}
-		do_command($user, $user, $cmd, $msg);
-	} else {
-		$_ = '!' . $_;
-		if (/^\![a-zA-Z]+\ .+/) {
-			s/^\!([a-zA-Z]+)\ (.*)/$1SPLITTERHACK$2/;
-			($cmd, $msg) = split(/SPLITTERHACK/);
-		} else {
-			s/^\!//;
-			$cmd = $_;
-			$msg = '';
-		}
-		do_command($user, $user, $cmd, $msg);
+	my $valid_command = qr/
+		^\!?		# optional exclamation mark
+		([a-zA-Z]+)	# some characters (stored in $1)
+		\s*		# optional whitespace
+		(.*)		# any remaining characters (stored in $2)
+		/x;
+
+	if ($text =~ /$valid_command/)
+	{
+		do_command($user, $user, $1, $2);
 	}
 }
 
