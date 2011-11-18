@@ -10,6 +10,7 @@
 use warnings; use strict;
 use 5.010;
 
+use Try::Tiny;
 use POE;
 use POE::Component::IRC;
 use Socket;
@@ -26,7 +27,7 @@ my $username		= "bananabot";# . $version ;
 my $password		= 'bananabot';
 my $server		= 'irc.ucc.asn.au';
 my $port		= '6667';
-my $owner		= 'banana';
+my $owner		= 'squimmy';
 my $network		= '$network';
 my $totalcolour		= '04';
 my $rollcolour		= '12';
@@ -50,7 +51,7 @@ my %aliases = (
 	'dagon',		'3#4d5l+3,3',
 	'duel',			'd10000'
 );
-#				'vs(\D*)(\d*)(\D*)(\d*)' '\"$1: \"d20+$2&\"$3: \"d20+$4');
+
 # initialise last-seen db
 my %last = ();
 my %lastwhen = ();
@@ -84,9 +85,8 @@ srand(time());
 # start the event loop
 $poe_kernel->run();							# run forever
 
-# go into a loop of attempting to connect
-# currently only tries once
-my ($when, $lines); #TODO: sort this mess out
+
+#my ($when, $lines); #TODO: sort this mess out
 
 sub on_start {							
 	my $address = inet_ntoa(inet_aton($server));		# translate address to IP
@@ -209,7 +209,7 @@ sub do_command {			# post-parsing command switcher
 			cmd_mquit($who, $where, $why);
 		}
 		when (/^r(oll)?/i) {
-			cmd_roll($who, $where, $why);
+			try_roll($who, $where, $why);
 		}
 		when (/^join/i) {
 			cmd_join($who, $where, $why);
@@ -223,28 +223,22 @@ sub do_command {			# post-parsing command switcher
 		when (/^botsnack/i) {
 			cmd_botsnack($who, $where);
 		}
-	#	when (/^($aliaslist)/i) {
-	#		$why = $what . ' ' . $why;
-	#		cmd_roll($who, $where, $why);
-	#	}
 		when (/^[\s!]*$/) {
 			$why = $what;
-			cmd_roll($who, $where, $why);
+			try_roll($who, $where, $why);
 		}
 	}
 }
 
 sub cmd_lastseen {
 	my ($who, $where, $what, $why) = @_;
-	if ($why =~ /$who/i) {
-		#$poe_kernel->post($network, 'kick'=>$where, $who, "HA! HA! I'm using THE INTERNET!");
-	} else {
+	if ($why ne $who) {
 		foreach $nick (keys %last) {
 			my $safenick = $nick;
 			$safenick =~ s/\|/\\\|/g;
 			if ($why =~ /^$safenick$/i) {
 				$why = $nick;
-				$when = $lastwhen{$why};
+				my $when = $lastwhen{$why};
 				$when = time() - $when;
 				$what = $last{$why};
 				
@@ -359,37 +353,41 @@ sub cmd_help {
 	}
 }
 
-sub cmd_roll {
+sub try_roll {
 	my ($who, $where, $why) = @_;
-	my ($die, $n, $s, $o, $j, $q, $type, @dice, $notones, $answercolour);
+	my @result;
+	try {
+		@result = cmd_roll($why);
+	} catch {
+		if (/\[ERROR\](?<error_message>.*)\[ERROR\]/) {
+			send_error_message($where, $who, $+{error_message});
+		} else {
+			warn scalar localtime, "\t$who tried to roll $why and caused an error: $_";
+		}
+		@result = undef;
+	};
+	
+	foreach my $line (@result) {
+		private_message($where, "$who, $line") if defined $line;
+	}
+}
+
+sub cmd_roll {
+	my ($why) = @_;
+	my @finaldiceresult;
+	my ($j, $q, $notones, $answercolour);
 	my $expression = $why;
+	
 	### INTERPRET MACROS ###
-#	$expression =~ s/(\d*)\s*w\s*(\d*)/$1\@$2#d10/ig;	# hack to make args work
 	foreach my $alias (keys %aliases) {
-#		private_message($where, "looking for $alias");
 		eval('$expression =~ s/$alias/' . $aliases{$alias} . '/ig;');
 	}
-	private_message($where, "DEBUG: \$expression = $expression") unless $DEBUG == 0;
+	
 	### CALCULATE NUMBER OF ROLLS #############################
-	$lines = 1;
-	my $target = 0;
-	my $ones = -1;
-	my $fre = '\s*((\d*)\s*(@@?\s*\d*)?)\s*';
-	if ($expression =~ /^${fre}#/) {
-		$expression =~ s/${fre}#([^,]+)/and_repeat($who, $where, $4, $1)/e;
-	} elsif ($expression =~ /#$fre$/) {
-		$expression =~ s/([^,]+)#$fre/and_repeat($who, $where, $1, $2)/e;
-	}
-	if ($expression =~ /,\s*\d+/) {
-		($expression, $lines) = split(/\s*,\s*/, $expression);
-	} elsif ($expression =~ /\d+\s*,/) {
-		($lines, $expression) = split(/\s*,\s*/, $expression);
-	}
-	if ($lines > 10) {
-		$lines = 10;
-	}
+	(my $line_count, $expression, my $target, my $ones) = calculate_roll_count($expression);
+
 	### SEPERATE BATCH ROLLS #################################
-	for (my $i = 0; $i < $lines; $i++) {
+	for my $i (1 .. $line_count) {
 		if ($ones > -1) {
 			$ones = 0;	# shadowrun check-for-ones
 			$notones = 0;
@@ -398,70 +396,26 @@ sub cmd_roll {
 		my $line = '';
 		my $successes = 0;
 		my $swmishap = 0;
-		foreach $_ (@batch) {
+		foreach my $subexpression (@batch) {
 	### IMPLEMENT ** OPERATOR #################################
-			while (/\*\*/) {				
-				s/([^,#]+)\*\*\s*(\d*)/roll_repeat($who, $where, $1, $2)/e;
-			}
-			my $p = $_;						#for pretty-printing
-			s/".*"//g;
+			$subexpression = repeat_rolls($subexpression);
+			my $p = $subexpression;						#for pretty-printing
+			$subexpression =~ s/".*"//g;
 			$p =~ s/"(.*)"/$1/g;
-	### SUBSTITUTE DIE ROLL RESULTS FOR THE d-EXPRESSIONS ####		7dfh5l
-			my @rolls = ($_ =~ /(\d*[do]\d*f?[hl]?\d*[hl]?\d*i?|\d*s)/ig);
+## SUBSTITUTE DIE ROLL RESULTS FOR THE d-EXPRESSIONS ####		7dfh5l
+			my @rolls = ($subexpression =~ /(\d*[do]\d*f?[hl]?\d*[hl]?\d*i?|\d*s)/ig);
 			for my $roll (@rolls) {
 				my $result = 0;
 				my $presult = "\003$dicecolour";
 				my $orig = $roll;
 	### CHECK FOR STAR WARS FAGGOTRY ###
 				if ($roll =~ /s/i) {
-					my ($die);
-					# OK, this is a star wars roll - TIME TO GO INSANE >:(
-					($n) = ($roll =~ /\d+/g);
-					private_message($where, "found star wars roll: $n") unless !$DEBUG;
-					if ($n == '') {$n = 1;}
-					$s = 6;
-					# Roll non-wild dice
-					my $highest = 0;
-					for (my $j = 0; $j < ($n - 1); $j++) {
-						$die = int(rand($s)) + 1;
-						$result += $die;
-						$presult .= '+' unless ($j == 0);
-						$presult .= "$die";
-						if ($die > $highest) { $highest = $die; }
-					}
-					# Wild die WTF
-					$presult .= '|';
-					$die = int(rand($s)) + 1;
-					if ($die == 1) {
-						$swmishap = 1;
-						$result -= $highest;
-						$presult .= '-' . $highest;
-					} else {
-						$result += $die;
-						$presult .= $die;
-						while ($die == 6) {
-							$die = int(rand($s)) + 1;
-							$result += $die;
-							$presult .= '+' . $die;
-						}
-					}
+					($result, $presult, $swmishap) = star_wars($roll, $presult, $swmishap);
 				} else {
 	### CONFORM TO ROLL FORMAT: a(d|o)blchd, {a,c,d} numbers {b} number or f
-				if ($roll !~ /l/i) {
-					$roll .= 'l0';
-				}
-				if ($roll !~ /h/i) {
-					$roll .= 'h0';
-				}
-				$roll =~ s/l([^0123456789])/l1$1/i;
-				$roll =~ s/h([^0123456789])/h1$1/i;
-				$roll =~ s/h(\d*)l(\d*)/l$2h$1/i;	
-				if ($roll =~ /^(d|o)/i) {
-					$roll = '1' . $roll;
-				}
-				$roll =~ s/(d|o)(h|l|i)/${1}6$2/i;
+				$roll = format_roll($roll);
 	### PARSE #################################################
-				my $individual;
+				my ($side_count, $die_count, $individual);
 				if ($roll =~ /i/i) {
 					$individual = 1;
 					$roll =~ s/i//i;
@@ -470,140 +424,89 @@ sub cmd_roll {
 				}
 				($roll, my $h) = split(/h/i, $roll);
 				($roll, my $l) = split(/l/i, $roll);
+				my $exploding_dice;
 				if ($roll =~ /d/i) {
-					($n, $s) = split(/d/i, $roll);
-					$type = 'd';
-					$o = 0;
+					($die_count, $side_count) = split(/d/i, $roll);
+					$exploding_dice = 0;
 				} elsif ($roll =~ /o/) {
-					($n, $s) = split(/o/i, $roll);
-					$type = 'o';
-					$o = 1;
+					($die_count, $side_count) = split(/o/i, $roll);
+					$exploding_dice = 1;
 				} elsif ($roll =~ /s/) {
-					($n, $s) = split(/s/i, $roll);
-					$type = 's';
+					($die_count, $side_count) = split(/s/i, $roll);
 				}
-				if ($n < 1) {
- 					error($where, $who, 100, "I can't roll less than 1 dice.");
- 					return;
- 				}
- 				if ($n > 39278) {
- 					error($where, $who, 39278, "I can't roll that many dice.");
- 					return;
- 				}
- 				if ($s > 24789653974) {
- 					error($where, $who, 24789653974, "I'M A PROFESSIONAL JOURNALIST. I THINK I KNOW HOW TO OPERATE A FUCKING HAT!");
- 					return;
- 				}
- 				if ($s !~ /f/i && $s < 2) {
- 					error($where, $who, 200, "$s is an invalid number of sides.");
- 					return;
- 				}
-				private_message($where, "about to roll; \$n=$n \$s=$s \$i=$i \$h=$h \$l=$l") unless !$DEBUG;
+				check_die_count($die_count);
+				check_side_count($side_count);
+
 	### ROLL ROLL ROLL ROLL ROLL ROLL ROLL ### BANANABOT ######			
-				@dice = ();
-				my (@sorteddice, @dropped, $top);
-				if ($o == 0 && $s !~ /f/i) {
-					for ($j = 0; $j < $n; $j++) {
- 						$die = int(rand($s)) + 1;
- 						if ($ones > -1) {
- 							if ($die == 1) {
- 								$ones++;
- 							} else {
- 								$notones++;
- 							}
- 						}
+				my (@dice, @sorted_dice);
+				
+				my $fudge = ($side_count =~ /f/i);
+				my $roll_dice = get_roll_function($fudge);
+
+				for (1 .. $die_count) {
+					my $finished_rolling = 0;
+					until ($finished_rolling) {
+						my $die = &$roll_dice($side_count);
+						if ($ones > -1 && !$fudge) {
+							if ($die == 1) {
+								$ones++;
+							} else {
+								$notones++;
+							}
+						}
 						push(@dice, $die);
-					}
-				} elsif ($o == 0 && $s =~ /f/i) {
-					for ($j = 0; $j < $n; $j++) {
- 						$die = int(rand(3)) - 1;
-						push(@dice, $die);
-					}
-				} elsif ($o == 1 && $s !~ /f/i) {
-					for ($j = 0; $j < $n; $j++) {
- 						$die = int(rand($s)) + 1;
- 						if ($ones > -1) {
- 							if ($die == 1) {
- 								$ones++;
- 							} else {
- 								$notones++;
- 							}
- 						}
- 						push(@dice, $die);
- 						if ($die == $s) {
- 							$j--;
- 						}
-					}
-				} elsif ($o == 1 && $s =~ /f/i) {
-					for ($j = 0; $j < $n; $j++) {
- 						$die = int(rand(3)) - 1;
-						push(@dice, $die);
- 						if ($die == 1) {
- 							$j--;
- 						}
+						if (!$exploding_dice) {
+							$finished_rolling = 1;
+						} else {
+							if ($fudge) {
+								$finished_rolling = 1 unless $die == 1;
+							} else { 
+								$finished_rolling = 1 unless $die == $side_count;
+							}
+						}	
 					}
 				}
-				if ($h + $l > $n) {
- 					error($where, $who, 88, "You can't drop more dice than are rolled.");
- 					return;
+				
+				if ($h + $l > $die_count) {
+ 					die "[ERROR]You can't drop more dice than are rolled.[ERROR]";
  				}
-				foreach $die (@dice) {
-					if ($s =~ /f/i) {			
-						if ($die == 1) {$presult .= '+';}
- 						if ($die == 0) {$presult .= ' ';}
- 						if ($die == -1) {$presult .= '-';}
- 					} 
- 					$result += $die;
- 				}
- 				if ($s !~ /f/i) {
+				$result = calculate_results(@dice);
+				$presult = format_fudge_results($presult, @dice) if $fudge;
+
+ 				if (!$fudge) {
  					if ($individual == 0) {
- 						$presult .= pad($n, $s, $result);
+ 						$presult .= pad($die_count, $side_count, $result, $line_count);
  					} else {
- 						foreach $die (@dice) {
- 							$presult .= pad(1, $s, $die) . '+';
+ 						foreach my $die (@dice) {
+ 							$presult .= pad(1, $side_count, $die, $line_count) . '+';
  						}
  						chop($presult);
  					}
  				}
- 				@sorteddice = sort { $a <=> $b } @dice;
- 				if ($l > 0 && $s !~ /f/i) {
-		 			@dropped = @sorteddice[$0 .. ($l-1)];
-		 			
-		 			foreach $die (@dropped) {
-		 				$result -= $die;
-		 				$presult .= '-' . pad(1, $s, $die);
-		 			}
-	 			}
-	 			if ($h > 0 && $s !~ /f/i) {
-	 				$top = $#sorteddice + 1;
-		 			@dropped = @sorteddice[($top-$h) .. ($top-1)];
-		 			
-		 			foreach $die (@dropped) {
-		 				$result -= $die;
-		 				$presult .= '-' . pad(1, $s, $die);
-		 			}
-	 			}
-	 			}
+ 				
+ 				@sorted_dice = sort { $a <=> $b } @dice;
+ 				unless ($fudge) {
+					if ($l > 0) {
+						($result, $presult) = drop_low_dice($result, $presult, $l, $side_count, $line_count, @sorted_dice);
+					}
+
+					if ($h > 0) {
+						($result, $presult) = drop_high_dice($result, $presult, $h, $side_count, $line_count, @sorted_dice);
+					}
+				}
+	 			
+
+	 		}
 				$presult .= "\003$rollcolour";
 				#replace the $roll with the new total for that $roll
-				s/$orig/($result)/;
+				$subexpression =~ s/$orig/($result)/;
 				$p =~ s/$orig/$presult/;
 			}
 	### MAKE SURE ONLY VALID SYNTAX REMAINS ###################
-			s/x/\*/gi;	#convenience, allow x for *
-			s/\^/\*\*/g;	#convenience, allow ^ for **
-			s/p/\+/gi;	#convenience, allow p for +
-			unless(m/^[\d\s\(\)\+\-\*\/\%\.]+$/) {
-				error($where, $who, -8, "I don't understand \"\002$why\002\".");
-				return;
-			}
+			my $subexpression = check_syntax($subexpression, $why);
 	### EVALUATE THE ANSWER ###################################
-			my $answer = eval;
-#			unless ($answer =~ /^[-\d\.]+$/) { #This should never be reached
-#				error($where, $who, 42, "'$_' evaluates to unacceptable result '$answer'");
-#				return;
-#			}
-#			$p =~ s/^\s*(.+)\s*$/$1/;
+			my $answer = eval($subexpression);
+
 			$q = $p;
 			$q =~ s/\".*\"//g;
 			if ($answer < $target || $target == 0) {
@@ -619,35 +522,230 @@ sub cmd_roll {
 			}
 			$line .= $answer . " ";
 		}
-#		if ($successes > 0) {
-#			$line .= "($successes success";
-#			if ($successes > 1) {
-#				$line .= 'es';
-#			}
-#			$line .= ')';
-#		}
+		
 		if ($swmishap) {$line .= "(or mishap)";}
 		if ($ones > -1) {
 			$line .= "\003${rollcolour}($successes hit" . ($successes != 1 ? "s" : "") . ", " . ($notones <= $ones ? "\003${totalcolour}" : "") . "$ones one" . ($ones != 1 ? "s" : "") . "\003${rollcolour})";
 		}
-		private_message($where, "$who, $line");
+		push (@finaldiceresult, $line);
+	}
+
+	return @finaldiceresult;
+}
+
+sub check_syntax {
+	my ($expression, $why) = @_;
+	$expression =~ s/x/\*/gi;	#convenience, allow x for *
+	$expression =~ s/\^/\*\*/g;	#convenience, allow ^ for **
+	$expression =~ s/p/\+/gi;	#convenience, allow p for +
+	unless($expression =~ /^[\d\s\(\)\+\-\*\/\%\.]+$/) {
+		die "[ERROR]I don't understand \"\002$why\002\".[ERROR]";
 	}
 	
-	return;
+	return $expression;
+}
+
+sub check_die_count {
+	my $die_count = shift;
+	if ($die_count < 1) {
+		die "[ERROR]I can't roll less than 1 dice.[ERROR]";
+	}
+	if ($die_count > 39278) {
+		die "[ERROR]I can't roll that many dice.[ERROR]";
+	}	
+}
+
+sub check_side_count {
+	my $side_count = shift;
+	if ($side_count =~ /\d/ && $side_count > 24789653974) {
+		die "[ERROR]A die with $side_count sides would be practically a sphere.[ERROR]";
+	}
+	if ($side_count !~ /f/i && $side_count < 2) {
+		die "[ERROR]$side_count is an invalid number of sides.[ERROR]";
+	}
+}
+
+sub calculate_roll_count {
+	my ($expression) = @_;
+	my $target = 0;
+	my $line_count = 1;
+	my $ones = -1;
+	my $fre = qr/
+		\s*			# any amount of whitespace
+		(?<expression>		# start of grouping (stored in $+{expression})
+			\d*		# any number of digits
+			\s*		# any amount of whitespace
+			(?:		# start of optional (uncaptured) group
+				@@?	# one or two '@' marks
+				\s*	# any amount of whitespace
+				\d*	# any number of digits
+			)?		# end of optional group
+		)			# end of grouping (stored in $+{expression})
+		\s*			# any amount of whitspace
+	/x;
+	my $non_commas_characters = qr/(?<non_commas>[^,]+)/;
+	if ($expression =~ /^${fre}#/) {
+		$expression =~ s/${fre}#$non_commas_characters/{
+			(my $value, $target, $ones) = and_repeat($+{non_commas}, $+{expression}, $ones);
+			$value;
+		}/e;
+	} elsif ($expression =~ /#$fre$/) {
+		$expression =~ s/$non_commas_characters#$fre/{
+			(my $value, $target, $ones) = and_repeat($+{non_commas}, $+{expression}, $ones);
+			$value;
+		}/e;
+	}
+	if ($expression =~ /,\s*\d+/) {			# a comma, maybe some whitespace, then numbers
+		($expression, $line_count) = split(/\s*,\s*/, $expression);
+	} elsif ($expression =~ /\d+\s*,/) {		# some numbers, maybe some whitespace, then a comma
+		($line_count, $expression) = split(/\s*,\s*/, $expression);
+	}
+	if ($line_count > 10) {
+		$line_count = 10;
+	}
+	
+	return ($line_count, $expression, $target, $ones);
+}
+
+sub format_roll {
+	my $roll = shift;
+	
+	if ($roll !~ /l/i) {
+		$roll .= 'l0';
+	}
+	if ($roll !~ /h/i) {
+		$roll .= 'h0';
+	}
+	$roll =~ s/l([^0123456789])/l1$1/i;
+	$roll =~ s/h([^0123456789])/h1$1/i;
+	$roll =~ s/h(\d*)l(\d*)/l$2h$1/i;	
+	if ($roll =~ /^(d|o)/i) {
+		$roll = '1' . $roll;
+	}
+	$roll =~ s/(d|o)(h|l|i)/${1}6$2/i;
+	
+	return $roll;
+}
+
+sub repeat_rolls {
+	my $expression = shift;
+	while ($expression =~ /\*\*/) {				
+		$expression =~ s/
+			([^,\#]+)		# one or more non-comma, non-hash characters (captured to $1)
+			\*\*			# two asterisks
+			\s*			# some whitespace
+			(\d*)			# some digits (captured to $2)
+			/roll_repeat($1, $2)	# all replaced with the return value of roll_repeat()
+		/ex;
+	}
+	return $expression;
+}
+
+sub star_wars {
+	my ($roll, $presult, $swmishap) = @_;
+	my ($die, $result);
+	# OK, this is a star wars roll - TIME TO GO INSANE >:(
+	my ($die_count) = ($roll =~ /\d+/g);
+	$die_count ||= 1;
+	my $side_count = 6;
+	# Roll non-wild dice
+	my $highest = 0;
+	for my $j (0 .. ($die_count - 2)) {
+		$die = int(rand($side_count)) + 1;
+		$result += $die;
+		$presult .= '+' unless ($j == 0);
+		$presult .= "$die";
+		if ($die > $highest) {
+			$highest = $die;	
+		}
+	}
+	# Wild die WTF
+	$presult .= '|';
+	$die = int(rand($side_count)) + 1;
+	if ($die == 1) {
+		$swmishap = 1;
+		$result -= $highest;
+		$presult .= '-' . $highest;
+	} else {
+		$result += $die;
+		$presult .= $die;
+		while ($die == 6) {
+			$die = int(rand($side_count)) + 1;
+			$result += $die;
+			$presult .= '+' . $die;
+		}
+	}
+	
+	return ($result, $presult, $swmishap);
+}
+
+sub get_roll_function {
+	my $fudge = shift;
+	if ($fudge) {
+		return sub { return (int(rand(3)) -1); };
+	}
+	return sub {
+		my $side_count = shift;
+		return int(rand($side_count)) + 1;
+	}
+}
+
+sub calculate_results {
+	my @dice = @_;
+	my $result;
+	foreach my $die (@dice) {
+		$result += $die;
+	}
+	return $result;
+}
+
+sub format_fudge_results {
+	my ($presult, @dice) = @_;
+	foreach my $die (@dice) {
+			if ($die == 1) {$presult .= '+';}
+			if ($die == 0) {$presult .= ' ';}
+			if ($die == -1) {$presult .= '-';}
+	}
+	return $presult;
+}
+
+sub drop_low_dice {
+	my ($result, $presult,  $l, $side_count, $line_count,@sorted_dice) = @_;
+
+	my @dropped = @sorted_dice[0 .. ($l-1)];
+
+	foreach my $die (@dropped) {
+		$result -= $die;
+		$presult .= '-' . pad(1, $side_count, $die, $line_count);
+	}
+	return ($result, $presult);
+}
+
+sub drop_high_dice {
+	my ($result, $presult, $h, $side_count, $line_count, @sorted_dice) = @_;
+
+	my @dropped = @sorted_dice[-$h .. -1];
+
+	foreach my $die (@dropped) {
+		$result -= $die;
+		$presult .= '-' . pad(1, $side_count, $die, $line_count);
+	}
+	return ($result, $presult);
 }
 
 sub roll_repeat {
-	my ($who, $where, $expr, $factor) = @_;
+	my ($expr, $factor) = @_;
 	if ($factor > 128 || $factor < 1) {
-		error($where, $who, 220, "Someone's playing silly buggers.");
-		return "fail";
+		die "[ERROR]Someone's playing silly buggers.[ERROR]";
 	}
 	my $exprplus = $expr . ' + ';
 	return (($exprplus x ($factor - 1)) . $expr);
 }
 
+
+
 sub and_repeat {
-	my ($who, $where, $expr, $factor) = @_;
+	my ($expr, $factor, $ones) = @_;
 	if ($factor =~ /@@/) {	#shadowrun roll
 		my $ones = 0;
 		if ($factor !~ /@@\d/) {
@@ -664,39 +762,35 @@ sub and_repeat {
 	}
 	($factor, my $target) = split(/@/, $factor);
 	if ($factor > 128 || $factor < 1) {
-		error($where, $who, 220, "Someone's playing silly buggers.");
-		return "fail";
+		die "[ERROR]Someone's playing silly buggers.[ERROR]";
 	}
 	my $exprplus = $expr . '&';
-	return (($exprplus x ($factor - 1)) . $expr);
+	return ((($exprplus x ($factor - 1)) . $expr), $target, $ones);
 }
 
-sub error() {
-	my ($where, $who, $n, $r) = @_;
-	private_message($where, "$who,\003$rollcolour Error: $r\003");
+sub send_error_message() {
+	my ($where, $who, $error_message) = @_;
+	private_message($where, "$who,\003$rollcolour Error: $error_message\003");
 }
 
 sub pad() {
-	my $nd = shift;
-	my $sd = shift;
-	my $inp = shift;
+	my ($die_count, $side_count, $result, $line_count) = @_;
+	if ($line_count == 1) {
+		return $result;
+	}
 
-	if ($lines == 1) {
-		return $inp;
-	}
-	
 	my $maxlen;
-	if ($sd =~ /f/i) {
-		$maxlen = $nd;
+	if ($side_count =~ /f/i) {
+		$maxlen = $die_count;
 	} else {
-		$maxlen = length ($nd * $sd);
+		$maxlen = length ($die_count * $side_count);
 	}
-	
-	for (my $k = length $inp; $k < $maxlen; $k++) {
-		$inp .= ' ';
+
+	for (my $k = length $result; $k < $maxlen; $k++) {
+		$result .= ' ';
 	}
-	
-	return $inp;
+
+	return $result;
 }
 
 
